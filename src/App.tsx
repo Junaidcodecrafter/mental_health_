@@ -52,7 +52,7 @@ import {
   limitToLast,
   type DocumentData
 } from 'firebase/firestore';
-import { getGeminiResponse, generateMeditationScript, type AIPersonalitySettings } from './services/geminiService';
+import { getGeminiResponse, generateMeditationScript, summarizeCheckIn, type AIPersonalitySettings } from './services/geminiService';
 import { cn } from './lib/utils';
 
 // Types
@@ -69,6 +69,11 @@ interface JournalEntry {
   content: string;
   timestamp: any;
   mood?: string;
+}
+
+interface CheckInResponse {
+  question: string;
+  answer: string;
 }
 
 enum OperationType {
@@ -162,6 +167,19 @@ export default function App() {
   const [selectedJournalMood, setSelectedJournalMood] = useState<string | null>(null);
   const [isSavingJournal, setIsSavingJournal] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState<SpeechSynthesisVoice | null>(null);
+  
+  // Check-in State
+  const [isCheckingIn, setIsCheckingIn] = useState(false);
+  const [checkInStep, setCheckInStep] = useState(0);
+  const [checkInData, setCheckInData] = useState<CheckInResponse[]>([]);
+
+  const CHECK_IN_QUESTIONS = [
+    "I'm here for our daily check-in. How are you feeling right now, in this very moment?",
+    "That's good to voice. Tell me a bit about your day—what have you been up to?",
+    "I see. Have you managed to take any time for yourself, even just a minute of self-care?",
+    "Lastly, is there anything specific weighing on your mind that you'd like to release?",
+    "Thank you for sharing your day with me. I'm going to distill this into a journal entry for you. One moment..."
+  ];
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -451,6 +469,11 @@ export default function App() {
       handleFirestoreError(error, OperationType.WRITE, path);
     }
 
+    if (isCheckingIn) {
+      handleCheckInResponse(content);
+      return;
+    }
+
     setIsTyping(true);
 
     try {
@@ -467,6 +490,88 @@ export default function App() {
       speak(aiResponse);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  // Check-in Flow Logic
+  const initiateCheckIn = () => {
+    setIsCheckingIn(true);
+    setCheckInStep(0);
+    setCheckInData([]);
+    
+    // Add first question to messages
+    const path = `users/${user!.uid}/messages`;
+    const firstQuestion = CHECK_IN_QUESTIONS[0];
+    
+    addDoc(collection(db, path), {
+      text: firstQuestion,
+      sender: 'ai',
+      timestamp: serverTimestamp(),
+    });
+    speak(firstQuestion);
+  };
+
+  const handleCheckInResponse = async (answer: string) => {
+    const nextStep = checkInStep + 1;
+    const currentQuestion = CHECK_IN_QUESTIONS[checkInStep];
+    
+    const updatedData = [...checkInData, { question: currentQuestion, answer }];
+    setCheckInData(updatedData);
+    setCheckInStep(nextStep);
+    setIsTyping(true);
+
+    const path = `users/${user!.uid}/messages`;
+
+    // Last Step: Process Summary
+    if (nextStep === CHECK_IN_QUESTIONS.length - 1) {
+      const finalMsg = CHECK_IN_QUESTIONS[nextStep];
+      await addDoc(collection(db, path), {
+        text: finalMsg,
+        sender: 'ai',
+        timestamp: serverTimestamp(),
+      });
+      speak(finalMsg);
+
+      try {
+        const { summary, mood } = await summarizeCheckIn(updatedData);
+        
+        // Save to Journal
+        const journalPath = `users/${user!.uid}/journal`;
+        await addDoc(collection(db, journalPath), {
+          content: summary,
+          mood: mood,
+          timestamp: serverTimestamp(),
+        });
+
+        const completionMsg = "I've saved our check-in to your journal. You can reflect on it anytime. How do you feel looking at that summary?";
+        await addDoc(collection(db, path), {
+          text: completionMsg,
+          sender: 'ai',
+          timestamp: serverTimestamp(),
+        });
+        speak(completionMsg);
+      } catch (err) {
+        console.error("Check-in processing failed", err);
+      } finally {
+        setIsCheckingIn(false);
+        setIsTyping(false);
+      }
+      return;
+    }
+
+    // Normal Step Transition
+    const nextQuestion = CHECK_IN_QUESTIONS[nextStep];
+    try {
+      await addDoc(collection(db, path), {
+        text: nextQuestion,
+        sender: 'ai',
+        timestamp: serverTimestamp(),
+      });
+      speak(nextQuestion);
+    } catch (err) {
+      console.error(err);
     } finally {
       setIsTyping(false);
     }
@@ -644,14 +749,14 @@ export default function App() {
       </div>
 
       {/* Header */}
-      <nav className="relative z-10 px-10 pt-8 flex justify-between items-center bg-gradient-to-b from-brand-bg to-transparent pb-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full border border-brand-primary flex items-center justify-center">
-            <div className="w-4 h-4 bg-brand-primary rounded-full shadow-[0_0_15px_#3E9B8B]"></div>
+      <nav className="relative z-10 px-4 md:px-10 pt-4 md:pt-8 flex justify-between items-center bg-gradient-to-b from-brand-bg to-transparent pb-4">
+        <div className="flex items-center gap-2 md:gap-3">
+          <div className="w-8 h-8 md:w-10 md:h-10 rounded-full border border-brand-primary flex items-center justify-center">
+            <div className="w-3 h-3 md:w-4 md:h-4 bg-brand-primary rounded-full shadow-[0_0_15px_#3E9B8B]"></div>
           </div>
-          <span className="text-xl font-light tracking-[0.2em] uppercase text-brand-secondary">MindfulAI</span>
+          <span className="text-lg md:text-xl font-light tracking-[0.2em] uppercase text-brand-secondary">MindfulAI</span>
         </div>
-        <div className="flex items-center gap-8">
+        <div className="flex items-center gap-2 md:gap-8">
           <div className="hidden md:flex gap-8 text-[10px] font-medium tracking-widest uppercase opacity-60">
             <span 
               onClick={initiateMeditation}
@@ -692,18 +797,69 @@ export default function App() {
           </button>
           <button 
             onClick={() => signOut(auth)}
-            className="p-2 text-slate-400 hover:text-white transition-colors"
+            className="p-2 pl-0 md:pl-2 text-slate-400 hover:text-white transition-colors"
           >
             <LogOut size={18} />
           </button>
         </div>
       </nav>
 
+      {/* Mobile Actions Quick Bar */}
+      <div className="md:hidden relative z-10 px-4 w-full overflow-x-auto pb-2 scrollbar-hide flex items-center gap-6 text-[10px] font-medium tracking-widest uppercase opacity-80">
+        <span 
+          onClick={initiateCheckIn}
+          className={cn(
+            "cursor-pointer whitespace-nowrap opacity-70 hover:opacity-100 flex items-center gap-1.5",
+            isCheckingIn && "text-brand-primary opacity-100"
+          )}
+        >
+          <Calendar size={12} /> Check-in
+        </span>
+        <span 
+          onClick={() => setIsInCall(true)}
+          className="cursor-pointer whitespace-nowrap flex items-center gap-1.5 text-brand-primary"
+        >
+          <Phone size={12} /> Speak
+        </span>
+        <span 
+          onClick={() => setShowJournal(true)}
+          className="cursor-pointer whitespace-nowrap opacity-70 hover:opacity-100 flex items-center gap-1.5"
+        >
+          <Book size={12} /> Journal
+        </span>
+        <span 
+          onClick={() => setShowInsights(true)}
+          className="cursor-pointer whitespace-nowrap opacity-70 hover:opacity-100 flex items-center gap-1.5"
+        >
+          <BarChart2 size={12} /> Insights
+        </span>
+      </div>
+
       {/* Main Grid */}
-      <main className="relative z-10 flex-1 grid grid-cols-1 md:grid-cols-12 gap-6 px-10 py-6 overflow-hidden">
+      <main className="relative z-10 flex-1 grid grid-cols-1 md:grid-cols-12 gap-6 px-4 md:px-10 py-2 md:py-6 overflow-hidden">
         
         {/* Left Sidebar: Memory & Insights */}
         <div className="hidden md:flex col-span-3 flex-col gap-6 overflow-y-auto scrollbar-hide pb-20">
+          <div 
+            onClick={initiateCheckIn}
+            className={cn(
+              "p-6 rounded-3xl bg-brand-surface border border-brand-border cursor-pointer transition-all hover:bg-white/5 group",
+              isCheckingIn && "border-brand-primary bg-brand-primary/5 shadow-[0_0_30px_rgba(62,155,139,0.1)]"
+            )}
+          >
+            <div className="flex items-center justify-between mb-4">
+               <Calendar size={18} className={cn("text-brand-secondary/40 group-hover:text-brand-primary transition-colors", isCheckingIn && "text-brand-primary")} />
+               {isCheckingIn && (
+                 <div className="flex items-center gap-2">
+                   <span className="text-[8px] uppercase tracking-widest text-brand-primary animate-pulse">Active</span>
+                   <div className="w-1.5 h-1.5 rounded-full bg-brand-primary animate-pulse"></div>
+                 </div>
+               )}
+            </div>
+            <h3 className="text-xs font-light tracking-widest uppercase text-brand-secondary mb-1">Daily Check-in</h3>
+            <p className="text-[10px] leading-relaxed opacity-40 uppercase tracking-wider">Mindful reflection session</p>
+          </div>
+
           <div className="p-6 rounded-3xl bg-brand-surface border border-brand-border backdrop-blur-xl">
             <h3 className="text-[10px] uppercase tracking-[0.2em] opacity-40 mb-4">Current Sentiment</h3>
             <div className="flex items-center gap-3 mb-2">
@@ -757,12 +913,12 @@ export default function App() {
               <motion.div 
                 animate={{ rotate: 360 }}
                 transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-                className="absolute w-[240px] h-[240px] border border-brand-border rounded-full"
+                className="absolute w-[160px] h-[160px] md:w-[240px] md:h-[240px] border border-brand-border rounded-full"
               ></motion.div>
               <motion.div 
                 animate={{ rotate: -360 }}
                 transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
-                className="absolute w-[180px] h-[180px] border border-brand-border rounded-full border-dashed"
+                className="absolute w-[120px] h-[120px] md:w-[180px] md:h-[180px] border border-brand-border rounded-full border-dashed"
               ></motion.div>
               
               {/* Core Orb */}
@@ -772,7 +928,7 @@ export default function App() {
                   boxShadow: isTyping ? "0 0 100px rgba(62,155,139,0.5)" : "0 0 80px rgba(62,155,139,0.3)"
                 }}
                 transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
-                className="w-32 h-32 bg-gradient-to-tr from-brand-accent via-brand-primary to-brand-secondary rounded-full flex items-center justify-center relative overflow-hidden z-10"
+                className="w-24 h-24 md:w-32 md:h-32 bg-gradient-to-tr from-brand-accent via-brand-primary to-brand-secondary rounded-full flex items-center justify-center relative overflow-hidden z-10"
               >
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_30%,rgba(255,255,255,0.4),transparent)]"></div>
                 <motion.div 
@@ -799,8 +955,25 @@ export default function App() {
           {/* Chat scrolling area */}
           <div 
             ref={scrollRef}
-            className="flex-1 w-full overflow-y-auto px-4 py-4 space-y-8 scrollbar-hide relative z-20 pb-32"
+            className="flex-1 w-full overflow-y-auto px-4 py-4 space-y-6 md:space-y-8 scrollbar-hide relative z-20 pb-24 md:pb-32"
           >
+            {isCheckingIn && (
+              <motion.div 
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mx-auto max-w-fit px-4 py-1.5 rounded-full bg-brand-primary/10 border border-brand-primary/20 flex items-center gap-2 mb-4"
+              >
+                <div className="w-1.5 h-1.5 rounded-full bg-brand-primary animate-pulse" />
+                <span className="text-[10px] uppercase tracking-widest text-brand-primary font-medium">Daily Check-in Active</span>
+                <span className="text-[10px] text-brand-primary/40 ml-2">Step {checkInStep + 1} of {CHECK_IN_QUESTIONS.length}</span>
+                <button 
+                  onClick={() => setIsCheckingIn(false)}
+                  className="ml-2 p-1 hover:bg-brand-primary/20 rounded-full transition-colors"
+                >
+                  <X size={10} className="text-brand-primary" />
+                </button>
+              </motion.div>
+            )}
             {messages.map((message) => (
               <motion.div
                 key={message.id}
@@ -895,17 +1068,17 @@ export default function App() {
       </main>
 
       {/* Bottom Input Control */}
-      <div className="relative z-30 px-10 pb-10 mt-auto pointer-events-none">
+      <div className="relative z-30 px-4 md:px-10 pb-6 md:pb-10 mt-auto pointer-events-none">
         <div className="max-w-3xl mx-auto pointer-events-auto">
-          <div className="flex items-center gap-4 bg-brand-surface border border-brand-border rounded-full p-2 backdrop-blur-3xl shadow-2xl shadow-black/80">
+          <div className="flex items-center gap-2 md:gap-4 bg-brand-surface border border-brand-border rounded-full p-2 backdrop-blur-3xl shadow-2xl shadow-black/80">
             <button 
               onClick={toggleListening}
               className={cn(
-                "w-12 h-12 rounded-full flex items-center justify-center transition-all relative overflow-hidden",
+                "w-10 h-10 md:w-12 md:h-12 flex-shrink-0 rounded-full flex items-center justify-center transition-all relative overflow-hidden",
                 isListening ? "bg-red-500/20 text-red-100" : "hover:bg-brand-surface text-brand-secondary/40"
               )}
             >
-              <Mic size={20} className={isListening ? "animate-pulse" : ""} />
+              <Mic size={18} className={cn(isListening ? "animate-pulse" : "", "md:w-[20px]")} />
             </button>
             
             <input 
@@ -916,18 +1089,18 @@ export default function App() {
                 if (e.key === 'Enter') handleSend();
               }}
               placeholder="Share your thoughts..." 
-              className="flex-1 bg-transparent border-none outline-none text-sm placeholder:text-brand-secondary/20 px-2 text-brand-secondary font-light"
+              className="flex-1 bg-transparent border-none outline-none text-sm md:text-base placeholder:text-brand-secondary/30 px-1 md:px-2 text-brand-secondary font-light min-w-0"
             />
             
             <button 
               onClick={() => handleSend()}
               disabled={!inputText.trim() && !isListening}
               className={cn(
-                "w-12 h-12 rounded-full flex items-center justify-center transition-all shadow-[0_0_20px_rgba(62,155,139,0.2)]",
-                inputText.trim() ? "bg-brand-primary text-brand-bg" : "bg-white/10 text-white/20"
+                "w-10 h-10 md:w-12 md:h-12 flex-shrink-0 rounded-full flex items-center justify-center transition-all",
+                inputText.trim() ? "bg-brand-primary text-brand-bg shadow-[0_0_20px_rgba(62,155,139,0.2)]" : "bg-white/10 text-white/20"
               )}
             >
-              <Send size={20} />
+              <Send size={18} className="md:w-[20px]" />
             </button>
           </div>
           
@@ -945,7 +1118,7 @@ export default function App() {
               initial={{ scale: 0.8, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.8, opacity: 0, y: 20 }}
-              className="bg-brand-surface border-2 border-red-500/50 p-10 rounded-[40px] max-w-xl w-full text-center space-y-8 shadow-[0_0_100px_rgba(239,68,68,0.2)]"
+              className="bg-brand-surface border-2 border-red-500/50 p-6 md:p-10 rounded-[32px] md:rounded-[40px] max-w-xl w-full text-center space-y-6 md:space-y-8 shadow-[0_0_100px_rgba(239,68,68,0.2)] max-h-[90vh] overflow-y-auto"
             >
               <div className="flex justify-center">
                 <motion.div 
@@ -1069,7 +1242,7 @@ export default function App() {
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-brand-surface border border-brand-border p-8 rounded-[40px] max-w-md w-full space-y-8 shadow-2xl relative overflow-hidden"
+              className="bg-brand-surface border border-brand-border p-6 md:p-8 rounded-[32px] md:rounded-[40px] max-w-md w-full space-y-6 md:space-y-8 shadow-2xl relative overflow-y-auto max-h-[90vh]"
             >
               <div className="flex justify-between items-center">
                 <h3 className="text-xl font-light tracking-widest uppercase text-brand-secondary">AI Personality</h3>
@@ -1231,7 +1404,7 @@ export default function App() {
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-brand-surface border border-brand-border p-8 rounded-[40px] max-w-2xl w-full h-[80vh] flex flex-col space-y-8 shadow-2xl relative overflow-hidden"
+              className="bg-brand-surface border border-brand-border p-6 md:p-8 rounded-[32px] md:rounded-[40px] max-w-2xl w-full h-[90vh] md:h-[80vh] flex flex-col space-y-6 md:space-y-8 shadow-2xl relative overflow-hidden"
             >
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-3">
@@ -1339,7 +1512,7 @@ export default function App() {
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-brand-surface border border-brand-border p-8 rounded-[40px] max-w-4xl w-full h-[80vh] flex flex-col space-y-8 shadow-2xl relative overflow-hidden"
+              className="bg-brand-surface border border-brand-border p-6 md:p-8 rounded-[32px] md:rounded-[40px] max-w-4xl w-full h-[90vh] md:h-[80vh] flex flex-col space-y-6 md:space-y-8 shadow-2xl relative overflow-hidden"
             >
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-3">

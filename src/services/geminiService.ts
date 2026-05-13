@@ -99,3 +99,42 @@ export async function generateMeditationScript(mood: string = "calm", type: Medi
     throw error;
   }
 }
+
+export async function summarizeCheckIn(checkInData: { question: string, answer: string }[]) {
+  try {
+    const dataString = checkInData.map(d => `Q: ${d.question}\nA: ${d.answer}`).join('\n\n');
+    const prompt = `You are a mindful journal assistant. Below is a transcript of a daily check-in interview.
+    Please summarize this check-in into a single, cohesive journal entry written from the user's perspective (first-person).
+    Include their mood, activities, and reflections. 
+    Keep it reflective and supportive.
+    
+    Transcript:
+    ${dataString}
+    
+    If the summary mentions a specific mood, also categorize it as one of these: Peaceful, Grateful, Anxious, Sad, Joyful, Angry, Tired, Focused, Neutral.
+    
+    Format:
+    Summary: [The journal entry]
+    Mood: [One of the labels above]`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: {
+        temperature: 0.6,
+      }
+    });
+
+    const text = response.text || "";
+    const summaryMatch = text.match(/Summary:\s*([\s\S]*?)(?=Mood:|$)/i);
+    const moodMatch = text.match(/Mood:\s*(\w+)/i);
+
+    return {
+      summary: summaryMatch ? summaryMatch[1].trim() : text,
+      mood: moodMatch ? moodMatch[1].trim() : 'Neutral'
+    };
+  } catch (error) {
+    console.error("Check-in Summary Error:", error);
+    throw error;
+  }
+}
