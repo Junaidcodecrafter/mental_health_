@@ -1,0 +1,53 @@
+{
+  "entities": {
+    "Message": {
+      "title": "Chat Message",
+      "description": "A single piece of communication between user and AI",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "description": "The message content" },
+        "sender": { "type": "string", "enum": ["user", "ai"], "description": "Who sent the message" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When it was sent" },
+        "sentiment": { "type": "number", "description": "Computed sentiment score" }
+      },
+      "required": ["text", "sender", "timestamp"]
+    },
+    "Settings": {
+      "title": "AI Personality Settings",
+      "description": "Customizable traits for the AI companion",
+      "type": "object",
+      "properties": {
+        "verbosity": { "type": "string", "enum": ["concise", "normal", "detailed"], "description": "How much the AI talks" },
+        "tone": { "type": "string", "enum": ["clinical", "empathetic", "friendly", "humorous", "playful", "serene"], "description": "The emotional quality of responses" },
+        "length": { "type": "string", "enum": ["short", "medium", "long"], "description": "Preferred response length" },
+        "empathyLevel": { "type": "number", "description": "Level of empathy expressed (0 to 1)" },
+        "traits": { "type": "array", "items": { "type": "string" }, "description": "Specific personality modifiers" }
+      }
+    },
+    "JournalEntry": {
+      "title": "Journal Entry",
+      "description": "A private reflection recorded by the user",
+      "type": "object",
+      "properties": {
+        "content": { "type": "string", "description": "The text of the journal entry" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When the entry was created" },
+        "mood": { "type": "string", "description": "Optional mood tag" }
+      },
+      "required": ["content", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "User specific chat history"
+    },
+    "/users/{userId}/settings/current": {
+      "schema": "Settings",
+      "description": "User's AI personality preferences"
+    },
+    "/users/{userId}/journal/{entryId}": {
+      "schema": "JournalEntry",
+      "description": "User's private reflections"
+    }
+  }
+}

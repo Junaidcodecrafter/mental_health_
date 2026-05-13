@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 0.1 Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isValidMessage(data) {
+      return data.text is string && 
+             data.text.size() <= 6000 &&
+             data.sender in ['user', 'ai'] &&
+             data.timestamp == request.time &&
+             (data.sender == 'user' ? (data.sentiment is number || !('sentiment' in data)) : true);
+    }
+
+    // 1. Connection Test Path
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    function isValidSettings(data) {
+      return data.verbosity in ['concise', 'normal', 'detailed'] &&
+             data.tone in ['clinical', 'empathetic', 'friendly', 'humorous', 'playful', 'serene'] &&
+             data.length in ['short', 'medium', 'long'] &&
+             (data.empathyLevel is number && data.empathyLevel >= 0 && data.empathyLevel <= 1) &&
+             (data.traits is list && data.traits.size() <= 5);
+    }
+
+    function isValidJournalEntry(data) {
+      return data.content is string && 
+             data.content.size() <= 10000 &&
+             data.timestamp == request.time &&
+             (!('mood' in data) || data.mood is string);
+    }
+
+    // 2. Users collection and subcollections
+    match /users/{userId} {
+      // allow read, write: if isOwner(userId); // Disabled to prevent blanket reads
+      
+      match /settings/{settingId} {
+        allow get: if isOwner(userId);
+        allow write: if isOwner(userId) && isValidSettings(incoming());
+      }
+      
+      match /messages/{messageId} {
+        // Pillar 8: Secure List Queries
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId);
+        
+        // Pillar 2: Validation Blueprints
+        allow create: if isOwner(userId) && isValidMessage(incoming());
+        
+        // Chat history is immutable
+        allow update, delete: if false;
+      }
+
+      match /journal/{entryId} {
+        allow list, get: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidJournalEntry(incoming());
+        allow delete: if isOwner(userId);
+        allow update: if false; // Journal entries are reflective snapshots
+      }
+    }
+  }
+}

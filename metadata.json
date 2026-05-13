@@ -1,0 +1,6 @@
+{
+  "name": "MindfulAI Companion",
+  "description": "An empathetic AI emotional support companion with a calming interface, sentiment analysis, and voice interaction.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["AI Emotional Support", "Voice Chat", "Sentiment Analysis"]
+}

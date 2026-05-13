@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-primary: var(--brand-primary);
+  --color-brand-secondary: var(--brand-secondary);
+  --color-brand-bg: var(--brand-bg);
+  --color-brand-accent: var(--brand-accent);
+  --color-brand-surface: var(--brand-surface);
+  --color-brand-border: var(--brand-border);
+  
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  :root {
+    --brand-primary: #3E9B8B;
+    --brand-secondary: #D1E8E2;
+    --brand-bg: #070D0C;
+    --brand-accent: #1B4D3E;
+    --brand-surface: rgba(255, 255, 255, 0.05);
+    --brand-border: rgba(255, 255, 255, 0.1);
+  }
+
+  :root.light {
+    --brand-primary: #348E7D;
+    --brand-secondary: #2D3748;
+    --brand-bg: #F8FAF9;
+    --brand-accent: #E6F2F0;
+    --brand-surface: rgba(255, 255, 255, 0.8);
+    --brand-border: rgba(0, 0, 0, 0.05);
+  }
+
+  body {
+    @apply bg-brand-bg text-brand-secondary font-sans transition-colors duration-500;
+  }
+}
+
+/* Custom scrollbar for immersive feel */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}
